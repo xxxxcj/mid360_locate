@@ -1,3 +1,4 @@
+#include <string>
 #include <thread>
 
 #include <ros/package.h>
@@ -37,6 +38,8 @@ ros::Publisher points_pub;
 ros::Publisher pose_pub;
 ros::Publisher path_pub;
 
+std::ofstream tum_stream;
+
 void pub_path(Eigen::Matrix4f &pose) {
     geometry_msgs::PoseStamped pose_msg;
     pose_msg.header.stamp    = ros::Time::now();
@@ -50,6 +53,23 @@ void pub_path(Eigen::Matrix4f &pose) {
     pose_msg.pose.orientation.z = quat.z();
     pose_msg.pose.orientation.w = quat.w();
     pose_pub.publish(pose_msg);
+
+    // 获取当前时间戳并转换为 TUM 格式所需的时间戳格式
+    std::stringstream timestamp;
+    timestamp << std::fixed << std::setprecision(6) << pose_msg.header.stamp.toSec();
+
+    // 将 Odometry 消息的位姿信息保存为 TUM 格式的一行
+    std::string line = timestamp.str() + " " +                             //
+                       std::to_string(pose_msg.pose.position.x) + " " +    //
+                       std::to_string(pose_msg.pose.position.y) + " " +    //
+                       std::to_string(pose_msg.pose.position.z) + " " +    //
+                       std::to_string(pose_msg.pose.orientation.x) + " " + //
+                       std::to_string(pose_msg.pose.orientation.y) + " " + //
+                       std::to_string(pose_msg.pose.orientation.z) + " " + //
+                       std::to_string(pose_msg.pose.orientation.w);
+
+    // 将行写入文件
+    tum_stream << line << std::endl;
 
     // 发布机器人轨迹
     path_msg.header.stamp    = ros::Time::now();
@@ -222,6 +242,14 @@ int main(int argc, char **argv) {
     float map_yaw;
     nh.param<float>("map_yaw", map_yaw, 0.0f);
 
+    std::string tum_save_path;
+    nh.param<std::string>("tum_save_path", tum_save_path, "src/mid360_locate/tum/localization_result.txt");
+    tum_stream.open(tum_save_path);
+    if (!tum_stream.is_open()) {
+        ROS_ERROR("Failed to open file: %s", tum_save_path.c_str());
+        return -1;
+    }
+
     ROS_INFO("Reading pcd file: %s.", map_file_path.c_str());
     if (pcl::io::loadPCDFile<pcl::PointXYZ>(map_file_path, *points_map) == -1) {
         PCL_ERROR("Couldn't read file.\n");
@@ -303,6 +331,8 @@ int main(int argc, char **argv) {
     std::thread publisher_thread(pointCloudPublisherThread, std::ref(map_pub));
 
     ros::spin();
+
+    tum_stream.close();
 
     return 0;
 }

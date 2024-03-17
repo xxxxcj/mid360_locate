@@ -6,6 +6,7 @@
         <param name="points_type" value="1"/>
         <param name="map_yaw" value="-0.05"/>
         <rosparam param="guess_pose">[0, -11, 1, 0, 0, 0]</rosparam> <!-- x y z roll pitch yaw -->
+        <param name="tum_save_path" value="$(find mid360_locate)/tum/localization_result.txt"/>
     </node>
 
     <!-- 启动 RViz -->
