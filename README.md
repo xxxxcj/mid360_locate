@@ -12,7 +12,7 @@
 mkdir -p ~/catkin_ws/src
 cd ~/catkin_ws/src
 git clone https://github.com/SMRT-AIST/fast_gicp
-git clone https://github.com/hku-mars/FAST_LIO
+git clone --recursive https://github.com/hku-mars/FAST_LIO
 git clone https://github.com/Livox-SDK/livox_ros_driver
 git clone https://github.com/Livox-SDK/livox_ros_driver2
 git clone https://github.com/xxxxcj/mid360_locate
