@@ -93,25 +93,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr get_local_map(
     return local_map;
 };
 
-void livox_callback(const livox_ros_driver::CustomMsg::ConstPtr &msg) {
-    pcl::PointCloud<pcl::PointXYZ>::Ptr points(new pcl::PointCloud<pcl::PointXYZ>);
-    for (uint i = 1; i < msg->point_num; i++) {
-        if (msg->points.at(i).x * msg->points.at(i).x + msg->points.at(i).y * msg->points.at(i).y +
-                msg->points.at(i).z * msg->points.at(i).z <
-            min_thr * min_thr) {
-            continue;
-        }
-        pcl::PointXYZ pt;
-        pt.x = msg->points.at(i).x;
-        pt.y = msg->points.at(i).y;
-        pt.z = msg->points.at(i).z;
-        points->push_back(pt);
-    }
-
-    pcl::PointCloud<pcl::PointXYZ>::Ptr local_map(new pcl::PointCloud<pcl::PointXYZ>);
-    auto center = pcl::PointXYZ(veh_pose(0, 3), veh_pose(1, 3), veh_pose(2, 3));
-    local_map   = get_local_map(points_map, center, local_map_thr);
-
+void registration(pcl::PointCloud<pcl::PointXYZ>::Ptr &points, pcl::PointCloud<pcl::PointXYZ>::Ptr &local_map) {
     pcl::PointCloud<pcl::PointXYZ>::Ptr aligned(new pcl::PointCloud<pcl::PointXYZ>);
     if (!inited) {
         inited = true;
@@ -119,19 +101,19 @@ void livox_callback(const livox_ros_driver::CustomMsg::ConstPtr &msg) {
         pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt;
 
         // 设置要匹配的目标点云
+        ndt.setInputSource(points);
         ndt.setInputTarget(local_map);
 
-        // 设置NDT算法的其他参数（例如最大迭代次数、停止条件、分辨率等）
-        ndt.setMaxCorrespondenceDistance(1.0);
-        ndt.setTransformationEpsilon(0.01);
+        ndt.setTransformationEpsilon(1e-8);
         ndt.setStepSize(0.1);
+        ndt.setMaximumIterations(100);
         ndt.setResolution(1.0);
 
-        ndt.setInputSource(points);
         ndt.align(*aligned, veh_pose);
 
         veh_pose = ndt.getFinalTransformation();
-        ROS_INFO("veh pose init finish!");
+        ROS_INFO(
+            "veh pose init finish: iter: %d x: %f y: %f!", ndt.getFinalNumIteration(), veh_pose(0, 3), veh_pose(1, 3));
 
     } else {
         fast_gicp::FastGICP<pcl::PointXYZ, pcl::PointXYZ> gicp;
@@ -154,6 +136,28 @@ void livox_callback(const livox_ros_driver::CustomMsg::ConstPtr &msg) {
     pub_path(veh_pose);
 }
 
+void livox_callback(const livox_ros_driver::CustomMsg::ConstPtr &msg) {
+    pcl::PointCloud<pcl::PointXYZ>::Ptr points(new pcl::PointCloud<pcl::PointXYZ>);
+    for (uint i = 1; i < msg->point_num; i++) {
+        if (msg->points.at(i).x * msg->points.at(i).x + msg->points.at(i).y * msg->points.at(i).y +
+                msg->points.at(i).z * msg->points.at(i).z <
+            min_thr * min_thr) {
+            continue;
+        }
+        pcl::PointXYZ pt;
+        pt.x = msg->points.at(i).x;
+        pt.y = msg->points.at(i).y;
+        pt.z = msg->points.at(i).z;
+        points->push_back(pt);
+    }
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr local_map(new pcl::PointCloud<pcl::PointXYZ>);
+    auto center = pcl::PointXYZ(veh_pose(0, 3), veh_pose(1, 3), veh_pose(2, 3));
+    local_map   = get_local_map(points_map, center, local_map_thr);
+
+    registration(points, local_map);
+}
+
 void pcl_callback(const sensor_msgs::PointCloud2::ConstPtr &msg) {
     pcl::PointCloud<pcl::PointXYZ>::Ptr points(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::fromROSMsg(*msg, *points);
@@ -162,48 +166,7 @@ void pcl_callback(const sensor_msgs::PointCloud2::ConstPtr &msg) {
     auto center = pcl::PointXYZ(veh_pose(0, 3), veh_pose(1, 3), veh_pose(2, 3));
     local_map   = get_local_map(points_map, center, local_map_thr);
 
-    pcl::PointCloud<pcl::PointXYZ>::Ptr aligned(new pcl::PointCloud<pcl::PointXYZ>);
-    if (!inited) {
-        inited = true;
-
-        pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt;
-
-        // 设置要匹配的目标点云
-        ndt.setInputTarget(local_map);
-
-        // 设置NDT算法的其他参数（例如最大迭代次数、停止条件、分辨率等）
-        ndt.setMaxCorrespondenceDistance(1.0);
-        ndt.setTransformationEpsilon(0.01);
-        ndt.setStepSize(0.1);
-        ndt.setResolution(1.0);
-
-        ndt.setInputSource(points);
-        ndt.align(*aligned, veh_pose);
-
-        veh_pose = ndt.getFinalTransformation();
-        ROS_INFO("veh pose init finish!");
-
-    } else {
-        fast_gicp::FastGICP<pcl::PointXYZ, pcl::PointXYZ> gicp;
-        gicp.setInputSource(points);
-        gicp.setInputTarget(local_map);
-        gicp.setNumThreads(4);
-        gicp.setMaxCorrespondenceDistance(0.5);
-        gicp.align(*aligned, veh_pose);
-        Eigen::Matrix4f gicp_tf_matrix;
-        veh_pose = gicp.getFinalTransformation();
-
-        ROS_INFO("veh pose %f %f", veh_pose(0, 3), veh_pose(1, 3));
-    }
-
-    sensor_msgs::PointCloud2 points_msg;
-    pcl::toROSMsg(*aligned, points_msg);
-    points_msg.header.stamp    = ros::Time::now();
-    points_msg.header.frame_id = "map";
-
-    points_pub.publish(points_msg);
-
-    pub_path(veh_pose);
+    registration(points, local_map);
 }
 
 void pointCloudPublisherThread(ros::Publisher &pub) {
@@ -250,7 +213,7 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    ROS_INFO("Reading pcd file: %s.", map_file_path.c_str());
+    ROS_INFO("Reading map file: %s.", map_file_path.c_str());
     if (pcl::io::loadPCDFile<pcl::PointXYZ>(map_file_path, *points_map) == -1) {
         PCL_ERROR("Couldn't read file.\n");
         return (-1);
