@@ -40,9 +40,11 @@ ros::Publisher path_pub;
 
 std::ofstream tum_stream;
 
+ros::Time t_msg;
+
 void pub_path(Eigen::Matrix4f &pose) {
     geometry_msgs::PoseStamped pose_msg;
-    pose_msg.header.stamp    = ros::Time::now();
+    pose_msg.header.stamp    = t_msg;
     pose_msg.header.frame_id = "map";
     pose_msg.pose.position.x = pose(0, 3);
     pose_msg.pose.position.y = pose(1, 3);
@@ -72,7 +74,7 @@ void pub_path(Eigen::Matrix4f &pose) {
     tum_stream << line << std::endl;
 
     // 发布机器人轨迹
-    path_msg.header.stamp    = ros::Time::now();
+    path_msg.header.stamp    = t_msg;
     path_msg.header.frame_id = "map";
     path_msg.poses.push_back(pose_msg);
     path_pub.publish(path_msg);
@@ -128,7 +130,7 @@ void registration(pcl::PointCloud<pcl::PointXYZ>::Ptr &points, pcl::PointCloud<p
 
     sensor_msgs::PointCloud2 points_msg;
     pcl::toROSMsg(*aligned, points_msg);
-    points_msg.header.stamp    = ros::Time::now();
+    points_msg.header.stamp    = t_msg;
     points_msg.header.frame_id = "map";
 
     points_pub.publish(points_msg);
@@ -151,6 +153,8 @@ void livox_callback(const livox_ros_driver::CustomMsg::ConstPtr &msg) {
         points->push_back(pt);
     }
 
+    t_msg = msg->header.stamp;
+
     pcl::PointCloud<pcl::PointXYZ>::Ptr local_map(new pcl::PointCloud<pcl::PointXYZ>);
     auto center = pcl::PointXYZ(veh_pose(0, 3), veh_pose(1, 3), veh_pose(2, 3));
     local_map   = get_local_map(points_map, center, local_map_thr);
@@ -161,6 +165,8 @@ void livox_callback(const livox_ros_driver::CustomMsg::ConstPtr &msg) {
 void pcl_callback(const sensor_msgs::PointCloud2::ConstPtr &msg) {
     pcl::PointCloud<pcl::PointXYZ>::Ptr points(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::fromROSMsg(*msg, *points);
+
+    t_msg = msg->header.stamp;
 
     pcl::PointCloud<pcl::PointXYZ>::Ptr local_map(new pcl::PointCloud<pcl::PointXYZ>);
     auto center = pcl::PointXYZ(veh_pose(0, 3), veh_pose(1, 3), veh_pose(2, 3));
@@ -275,7 +281,7 @@ int main(int argc, char **argv) {
     // 将pcl点云转换为ROS消息
     pcl::toROSMsg(*points_map, cloud_msg);
     // 设置消息的元数据
-    cloud_msg.header.stamp    = ros::Time::now();
+    cloud_msg.header.stamp    = t_msg;
     cloud_msg.header.frame_id = "map";
 
     ros::Subscriber points_sub;

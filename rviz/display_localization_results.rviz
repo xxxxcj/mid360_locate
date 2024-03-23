@@ -6,6 +6,7 @@ Panels:
       Expanded:
         - /Global Options1
         - /Status1
+        - /Grid1
         - /aligned1/Autocompute Value Bounds1
       Splitter Ratio: 0.5117647051811218
     Tree Height: 1576
@@ -193,9 +194,9 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -1.4038360118865967
-        Y: -15.853904724121094
-        Z: 2.180356979370117
+        X: 9.002479553222656
+        Y: -30.963367462158203
+        Z: 2.169982433319092
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
