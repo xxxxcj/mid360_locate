@@ -335,15 +335,16 @@ if __name__ == "__main__":
     )
     est_tum_traj = read_tum(est_file_path)
 
-    ref_file_path = (
-        "/home/ubuntu/Projects/AVP-RGBD-Shared/src/localization/result/20240331-5.txt"
-    )
+    # ref_file_path = (
+    #     "/home/ubuntu/Projects/AVP-RGBD-Shared/src/localization/result/20240331-1.txt"
+    # )
+    ref_file_path = "/home/ubuntu/Projects/AVP-RGBD-Shared/src/localization/result/20240331-z03-infra-contours.txt"
     ref_tum_traj = read_tum(ref_file_path)
 
-    # t_offset , max_corr = get_time_offset(est_tum_traj, ref_tum_traj, 0.05, 0.001, 1)
-    # print(t_offset, max_corr)
+    t_offset , max_corr = get_time_offset(est_tum_traj, ref_tum_traj, 0.05, 0.001, 1)
+    print(t_offset, max_corr)
 
-    t_offset = 0.189  # .35  #.40
+    # t_offset = 0.189  # .35  #.40
     T_w, T_e, t_err, R_err = get_ext_and_coordinate_T(
         est_tum_traj, ref_tum_traj, 0.05, t_offset, 100
     )
@@ -356,9 +357,9 @@ if __name__ == "__main__":
     transform_tum_poses(est_file_path, T_e, save_path)
 
     os.system(
-        f"evo_ape tum {save_path} {ref_file_path} -a --t_max_diff=0.01 --t_offset={-t_offset} -p --plot_mode xy -r trans_part"
+        f"evo_ape tum {save_path} {ref_file_path} -a --t_max_diff=0.01 --t_offset={-t_offset}  --plot_mode xy -r trans_part --save_results {ref_file_path[:-4]}-trans.zip --save_plot {ref_file_path[:-4]}-trans.png"
     )
 
     os.system(
-        f"evo_ape tum {save_path} {ref_file_path} -a --t_max_diff=0.01 --t_offset={-t_offset} -p --plot_mode xy -r angle_deg"
+        f"evo_ape tum {save_path} {ref_file_path} -a --t_max_diff=0.01 --t_offset={-t_offset}  --plot_mode xy -r angle_deg --save_results {ref_file_path[:-4]}-rot.zip --save_plot {ref_file_path[:-4]}-rot.png"
     )

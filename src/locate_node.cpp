@@ -23,9 +23,10 @@
 
 #include "livox_ros_driver/CustomMsg.h"
 #include "fast_gicp/gicp/fast_gicp.hpp"
+#include "ros/console.h"
 
 constexpr float min_thr       = 1.5f;
-constexpr float local_map_thr = 15.f;
+constexpr float local_map_thr = 25.f;
 
 bool inited              = false;
 Eigen::Matrix4f veh_pose = Eigen::Matrix4f::Identity();
@@ -139,6 +140,8 @@ void registration(pcl::PointCloud<pcl::PointXYZ>::Ptr &points, pcl::PointCloud<p
 }
 
 void livox_callback(const livox_ros_driver::CustomMsg::ConstPtr &msg) {
+    auto start = std::chrono::high_resolution_clock::now();
+
     pcl::PointCloud<pcl::PointXYZ>::Ptr points(new pcl::PointCloud<pcl::PointXYZ>);
     for (uint i = 1; i < msg->point_num; i++) {
         if (msg->points.at(i).x * msg->points.at(i).x + msg->points.at(i).y * msg->points.at(i).y +
@@ -160,11 +163,25 @@ void livox_callback(const livox_ros_driver::CustomMsg::ConstPtr &msg) {
     local_map   = get_local_map(points_map, center, local_map_thr);
 
     registration(points, local_map);
+
+    auto end                              = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = end - start;
+    ROS_INFO("Localization Time: %.2f[ms]", elapsed.count() * 1e3);
 }
 
 void pcl_callback(const sensor_msgs::PointCloud2::ConstPtr &msg) {
+    auto start = std::chrono::high_resolution_clock::now();
+
     pcl::PointCloud<pcl::PointXYZ>::Ptr points(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::fromROSMsg(*msg, *points);
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr points_filtered(new pcl::PointCloud<pcl::PointXYZ>);
+    for (auto &pt : *points) {
+        if (pt.x * pt.x + pt.y * pt.y + pt.z * pt.z < min_thr * min_thr) {
+            continue;
+        }
+        points_filtered->push_back(pt);
+    }
 
     t_msg = msg->header.stamp;
 
@@ -172,7 +189,11 @@ void pcl_callback(const sensor_msgs::PointCloud2::ConstPtr &msg) {
     auto center = pcl::PointXYZ(veh_pose(0, 3), veh_pose(1, 3), veh_pose(2, 3));
     local_map   = get_local_map(points_map, center, local_map_thr);
 
-    registration(points, local_map);
+    registration(points_filtered, local_map);
+
+    auto end                              = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = end - start;
+    ROS_INFO("Localization Time: %.2f[ms]", elapsed.count() * 1e3);
 }
 
 void pointCloudPublisherThread(ros::Publisher &pub) {
@@ -180,6 +201,10 @@ void pointCloudPublisherThread(ros::Publisher &pub) {
     ros::Rate loop_rate(1);
     while (ros::ok()) {
         pub.publish(cloud_msg);
+
+        // publish guess pose
+        pub_path(veh_pose);
+
         loop_rate.sleep();
     }
 }
@@ -208,7 +233,9 @@ int main(int argc, char **argv) {
         ROS_ERROR("Parameter guess_pose failed to get value");
     }
 
-    float map_yaw;
+    float map_yaw, map_roll, map_pitch;
+    nh.param<float>("map_roll", map_roll, 0.0f);
+    nh.param<float>("map_pitch", map_pitch, 0.0f);
     nh.param<float>("map_yaw", map_yaw, 0.0f);
 
     std::string tum_save_path;
@@ -270,7 +297,10 @@ int main(int argc, char **argv) {
     ROS_INFO("Rotate map's yaw.");
 
     Eigen::Affine3f transform = Eigen::Affine3f::Identity();
-    transform.rotate(Eigen::AngleAxisf(map_yaw, Eigen::Vector3f::UnitZ()));
+    transform.rotate(
+        Eigen::AngleAxisf(map_yaw, Eigen::Vector3f::UnitZ()) *   //
+        Eigen::AngleAxisf(map_pitch, Eigen::Vector3f::UnitY()) * //
+        Eigen::AngleAxisf(map_roll, Eigen::Vector3f::UnitX()));
 
     // 应用旋转变换到点云
     pcl::PointCloud<pcl::PointXYZ>::Ptr rotated_cloud(new pcl::PointCloud<pcl::PointXYZ>);
