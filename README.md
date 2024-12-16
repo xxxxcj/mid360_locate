@@ -1,5 +1,10 @@
 # MID360 locate
 
+## information
+1. This repository is a simple software to locate in parking using mid360.
+2. First you need to build the pointcloud map using [fast_lio](https://github.com/hku-mars/FAST_LIO).
+3. Because the parking lot is flat, this program will first fit the point cloud map to the flat surface and then convert the point cloud map to the flat surface.
+
 ## dependency
 + [fast_gicp](https://github.com/SMRT-AIST/fast_gicp)
 + [fast_lio](https://github.com/hku-mars/FAST_LIO)
