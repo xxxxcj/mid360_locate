@@ -43,7 +43,7 @@ std::ofstream tum_stream;
 
 ros::Time t_msg;
 
-void pub_path(Eigen::Matrix4f &pose) {
+void pub_path(Eigen::Matrix4f &pose, bool write_file = true) {
     geometry_msgs::PoseStamped pose_msg;
     pose_msg.header.stamp    = t_msg;
     pose_msg.header.frame_id = "map";
@@ -57,22 +57,24 @@ void pub_path(Eigen::Matrix4f &pose) {
     pose_msg.pose.orientation.w = quat.w();
     pose_pub.publish(pose_msg);
 
-    // 获取当前时间戳并转换为 TUM 格式所需的时间戳格式
-    std::stringstream timestamp;
-    timestamp << std::fixed << std::setprecision(6) << pose_msg.header.stamp.toSec();
+    if (write_file) {
+        // 获取当前时间戳并转换为 TUM 格式所需的时间戳格式
+        std::stringstream timestamp;
+        timestamp << std::fixed << std::setprecision(6) << pose_msg.header.stamp.toSec();
 
-    // 将 Odometry 消息的位姿信息保存为 TUM 格式的一行
-    std::string line = timestamp.str() + " " +                             //
-                       std::to_string(pose_msg.pose.position.x) + " " +    //
-                       std::to_string(pose_msg.pose.position.y) + " " +    //
-                       std::to_string(pose_msg.pose.position.z) + " " +    //
-                       std::to_string(pose_msg.pose.orientation.x) + " " + //
-                       std::to_string(pose_msg.pose.orientation.y) + " " + //
-                       std::to_string(pose_msg.pose.orientation.z) + " " + //
-                       std::to_string(pose_msg.pose.orientation.w);
+        // 将 Odometry 消息的位姿信息保存为 TUM 格式的一行
+        std::string line = timestamp.str() + " " +                             //
+                           std::to_string(pose_msg.pose.position.x) + " " +    //
+                           std::to_string(pose_msg.pose.position.y) + " " +    //
+                           std::to_string(pose_msg.pose.position.z) + " " +    //
+                           std::to_string(pose_msg.pose.orientation.x) + " " + //
+                           std::to_string(pose_msg.pose.orientation.y) + " " + //
+                           std::to_string(pose_msg.pose.orientation.z) + " " + //
+                           std::to_string(pose_msg.pose.orientation.w);
 
-    // 将行写入文件
-    tum_stream << line << std::endl;
+        // 将行写入文件
+        tum_stream << line << std::endl;
+    }
 
     // 发布机器人轨迹
     path_msg.header.stamp    = t_msg;
@@ -203,7 +205,7 @@ void pointCloudPublisherThread(ros::Publisher &pub) {
         pub.publish(cloud_msg);
 
         // publish guess pose
-        pub_path(veh_pose);
+        pub_path(veh_pose, false);
 
         loop_rate.sleep();
     }
@@ -214,10 +216,11 @@ int main(int argc, char **argv) {
     ros::NodeHandle nh("~");
 
     int points_type;
-    std::string map_file_path;
+    std::string map_file_path, topic_name;
     nh.param<std::string>(
         "map_file_path", map_file_path, ros::package::getPath("fast_lio") + "/PCD/points_map_20240310.pcd");
     nh.param<int>("points_type", points_type, 0); // 0: livox, 1:pointcloud2
+    nh.param<std::string>("topic_name", topic_name, "/livox/lidar");
 
     std::vector<float> guess_pose;
     if (nh.getParam("guess_pose", guess_pose)) { // [x y z roll pitch yaw]
@@ -316,10 +319,10 @@ int main(int argc, char **argv) {
 
     ros::Subscriber points_sub;
     if (points_type == 0) {
-        points_sub = nh.subscribe("/livox/lidar", 1, livox_callback);
+        points_sub = nh.subscribe(topic_name, 1, livox_callback);
         ROS_INFO("Subscribe livox pointcloud");
     } else {
-        points_sub = nh.subscribe("/livox/lidar", 1, pcl_callback);
+        points_sub = nh.subscribe(topic_name, 1, pcl_callback);
         ROS_INFO("Subscribe ros pointcloud2");
     }
     points_pub = nh.advertise<sensor_msgs::PointCloud2>("/aligned", 1);

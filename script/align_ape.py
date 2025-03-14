@@ -3,6 +3,7 @@ import os
 import numpy as np
 from scipy.linalg import logm
 from scipy.spatial.transform import Rotation
+from scipy.optimize import linear_sum_assignment
 import matplotlib.pyplot as plt
 
 np.set_printoptions(suppress=True)
@@ -108,13 +109,13 @@ def binary_search(
 def tum2matrix(arr):
     # 提取位置和四元数
     pos = arr[1:4]
-    pos[2] = 0
+    # pos[2] = 0
     quat = arr[4:]
 
     # 将四元数转换为旋转矩阵
     r = Rotation.from_quat(quat).as_euler("xyz")
-    r[0] = 0
-    r[1] = 0
+    # r[0] = 0
+    # r[1] = 0
     rot_matrix = Rotation.from_euler("xyz", r).as_matrix()
 
     # 构建变换矩阵
@@ -124,33 +125,56 @@ def tum2matrix(arr):
 
     return transform_matrix
 
+def timestamp_match(A, B, max_diff=0.1):
+    """
+    使用匈牙利算法找到两个时间戳序列的最优匹配对，使时间误差最小。
+    
+    参数:
+    A: List[float]，第一个时间戳序列
+    B: List[float]，第二个时间戳序列
+    
+    返回:
+    matches: List[Tuple[float, float]]，最优匹配对
+    """
+    # 构造代价矩阵
+    m, n = len(A), len(B)
+    cost_matrix = np.zeros((m, n))
 
-def matrix2euler(R):
-    # 先计算 pitch（绕 y 轴的旋转角度）和 roll（绕 x 轴的旋转角度）
-    pitch = -np.arcsin(R[2, 0])
-    roll = np.arctan2(R[2, 1], R[2, 2])
+    for i in range(m):
+        for j in range(n):
+            error = abs(A[i] - B[j])
+            cost_matrix[i][j] = error if error < max_diff else 2*max_diff
 
-    # 计算 yaw（绕 z 轴的旋转角度）
-    yaw = np.arctan2(R[1, 0], R[0, 0])
+    # 匈牙利算法求解
+    row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
-    return np.array([roll, pitch, yaw])
+    valid_mask = (cost_matrix[row_ind, col_ind] < max_diff)
+    # print(valid_mask)
+    # print(cost_matrix[row_ind, col_ind] )
+    # for i,j in zip(row_ind, col_ind):
+    #     print(i,j,cost_matrix[i,j],abs(A[i] - B[j]))
+    valid_rows = row_ind[valid_mask]
+    valid_cols = col_ind[valid_mask]
 
+    return valid_rows, valid_cols
 
 def get_correspondence_tum(
     est: np.ndarray, ref: np.ndarray, t_max_diff: float = 0.01, t_offset: float = 0.0
 ):
-    est_idx, ref_idx = [], []
-    for est_id, t in enumerate(est[0]):
-        ref_id = binary_search(ref, t, t_max_diff, t_offset)
-        if ref_id != -1:
-            est_idx.append(est_id)
-            ref_idx.append(ref_id)
+    # est_idx, ref_idx = [], []
+    # for est_id, t in enumerate(est[0]):
+    #     ref_id = binary_search(ref, t, t_max_diff, t_offset)
+    #     if ref_id != -1:
+    #         est_idx.append(est_id)
+    #         ref_idx.append(ref_id)
+
+    est_idx, ref_idx = timestamp_match(est[0,:]+t_offset, ref[0,:], t_max_diff)
 
     return est[:, est_idx], ref[:, ref_idx]
 
 
 def get_relative_correspondence(
-    est: np.ndarray, ref: np.ndarray, frequency: float = 15, t_duration: float = 1.0
+    est: np.ndarray, ref: np.ndarray, frequency: float = 10, t_duration: float = 1.0
 ):
     step = int(t_duration * frequency)
     est_relative = []
@@ -160,8 +184,8 @@ def get_relative_correspondence(
         T_est = tum2matrix(est[:, i])
         T_ref = tum2matrix(ref[:, i])
         if i != 0:
-            est_relative.append(np.linalg.inv(T_est) @ T_est_last)
-            ref_relative.append(np.linalg.inv(T_ref) @ T_ref_last)
+            est_relative.append(np.linalg.inv(T_est_last) @ T_est)
+            ref_relative.append(np.linalg.inv(T_ref_last) @ T_ref)
         T_est_last, T_ref_last = T_est, T_ref
     return est_relative, ref_relative
 
@@ -179,6 +203,7 @@ def get_time_offset(
         est_tum, ref_tum = get_correspondence_tum(
             est_tum_traj, ref_tum_traj, t_max_diff, n * offset_step
         )
+
         est_relative, ref_relative = get_relative_correspondence(est_tum, ref_tum)
 
         R_est_norm = []
@@ -191,11 +216,24 @@ def get_time_offset(
         R_ref_norm = np.array(R_ref_norm)
 
         corr = np.corrcoef(R_est_norm, R_ref_norm)[0, 1]
+        # corr = np.linalg.norm(R_est_norm-R_ref_norm)
         if corr > max_corr:
             max_corr = corr
             t_offset = n * offset_step
-        print(n * offset_step, corr)
+        print(f"offset: {n * offset_step:.4}\t corr: {corr:.4}\t pair: {est_tum.shape[1]}")
     return t_offset, max_corr
+
+
+def rotation_error_angle(R1, R2):
+    # Compute relative rotation matrix
+    R_error = np.dot(R1.T, R2)
+    # Compute the trace of the relative rotation matrix
+    trace = np.trace(R_error)
+    # Compute the angle using arccos, with numerical stability
+    x = (trace - 1) / 2
+    x = np.clip(x, -1, 1)  # Ensure x is in [-1, 1]
+    angle_rad = np.arccos(x)  # Angle in radians
+    return angle_rad
 
 
 def get_ext_and_coordinate_T(
@@ -205,6 +243,7 @@ def get_ext_and_coordinate_T(
     t_offset: float = 0.0,
     max_iter: int = 10,
     err_eps: float = 1e-5,
+    verbose=False
 ):
     est_tum, ref_tum = get_correspondence_tum(
         est_tum_traj, ref_tum_traj, t_max_diff, t_offset
@@ -229,8 +268,11 @@ def get_ext_and_coordinate_T(
             "xyz"
         ) - Rotation.from_matrix(Tref[i][0:3, 0:3]).as_euler("xyz")
         R_err_list.append(np.linalg.norm(R_err))
-    print(f"Initial Trans Error: {np.mean(t_err_list):.4f} [m]")
-    print(f"Initial Angle Error: {np.mean(R_err_list)/np.pi * 180:.2f} [deg]")
+
+    if verbose:
+        print(f"Find {est_tum.shape[1]} Pairs")
+        print(f"Initial Trans Error: {np.mean(t_err_list):.4f} [m]")
+        print(f"Initial Angle Error: {np.mean(R_err_list)/np.pi * 180:.2f} [deg]")
 
     for n_iter in range(max_iter):
         t_est_np = []
@@ -241,7 +283,7 @@ def get_ext_and_coordinate_T(
         t_est_np = np.stack(t_est_np, axis=1)
         t_ref_np = np.stack(t_ref_np, axis=1)
 
-        R, t, _ = umeyama_alignment(t_est_np, t_ref_np)
+        R, t, _ = umeyama_alignment(t_est_np, t_ref_np)  # y=T@x
         T = np.eye(4)
         T[:3, :3] = R
         T[:3, 3] = t
@@ -268,36 +310,35 @@ def get_ext_and_coordinate_T(
         T2 = np.eye(4)
         T2[:3, :3] = R
         T2[:3, 3] = t
-
-        # T2 = np.linalg.inv(T2)
-        for i in range(est_tum.shape[1]):
-            Test[i] = Test[i] @ T2
+        T2 = np.linalg.inv(T2)
         T_e = T_e @ T2
+
+        for i in range(est_tum.shape[1]):
+            Tref[i] = Tref[i] @ T2
 
         t_err_list.clear()
         R_err_list.clear()
         for i in range(est_tum.shape[1]):
-            t_err_list.append(np.linalg.norm(Test[i][0:3, 3] - Tref[i][0:3, 3]))
-            R_err = Rotation.from_matrix(Test[i][0:3, 0:3]).as_euler(
-                "xyz"
-            ) - Rotation.from_matrix(Tref[i][0:3, 0:3]).as_euler("xyz")
-            R_err_list.append(np.linalg.norm(R_err))
-        print(
-            f"Iter: {n_iter:>3d} Distance: {np.mean(t_err_list):.4f}[m] Angle:{np.mean(R_err_list)/np.pi * 180:.2f}[deg]"
-        )
+            t_err_list.append(np.linalg.norm(Test[i][0:3, 3] - Tref[i][0:3, 3], ord=2))
+            # R_err = Rotation.from_matrix(Test[i][0:3, 0:3]).as_euler("xyz") - \
+            #     Rotation.from_matrix(Tref[i][0:3, 0:3]).as_euler("xyz")
+            R_err_list.append(rotation_error_angle(Test[i][0:3, 0:3], Tref[i][0:3, 0:3]))
+        
+        if verbose:
+            print(
+                f"Iter: {n_iter:>3d} Distance: {np.mean(t_err_list):.4f}[m] Angle:{np.mean(R_err_list)/np.pi * 180:.4f}[deg]"
+            )
 
-        if (
-            abs(np.mean(t_err_list) - t_err_mean_last) < err_eps
-            and abs(np.mean(R_err_list) - R_err_mean_last) < err_eps
-        ):
+        if abs(np.mean(t_err_list) - t_err_mean_last) < err_eps or \
+            abs(np.mean(R_err_list) - R_err_mean_last) < err_eps:
             break
         t_err_mean_last = np.mean(t_err_list)
         R_err_mean_last = np.mean(R_err_list)
 
-    return T_w, T_e, np.mean(t_err_list), np.mean(R_err_list) / np.pi * 180
+    return T_w, T_e, np.mean(t_err_list), np.mean(R_err_list) / np.pi * 180, est_tum.shape[1]
 
 
-def transform_tum_poses(file_path, transformation_matrix, file_path_new):
+def transform_tum_poses(file_path, T_w, T_e, file_path_new):
     poses = []
     with open(file_path, "r") as file:
         for line in file:
@@ -309,7 +350,7 @@ def transform_tum_poses(file_path, transformation_matrix, file_path_new):
     transformed_poses = []
     for pose in poses:
         timestamp = pose[0]
-        transformed_pose = pose[1] @ transformation_matrix
+        transformed_pose = T_w @ pose[1] @ T_e
         transformed_poses.append((timestamp, transformed_pose))
 
     with open(file_path_new, "w") as file:
@@ -320,7 +361,7 @@ def transform_tum_poses(file_path, transformation_matrix, file_path_new):
 
             # 将旋转矩阵转换为四元数
             r = Rotation.from_matrix(rotation_matrix)
-            q = r.as_quat()
+            q = r.as_quat()  # x, y, z, w
             file.write(
                 "{:.6f} {:.6f} {:.6f} {:.6f} {:.6f} {:.6f} {:.6f} {:.6f}\n".format(
                     timestamp, t[0], t[1], t[2], q[0], q[1], q[2], q[3]
@@ -330,36 +371,59 @@ def transform_tum_poses(file_path, transformation_matrix, file_path_new):
 
 if __name__ == "__main__":
 
-    est_file_path = (
-        "/home/ubuntu/Projects/Livox_ws/src/mid360_locate/tum/localization_result.txt"
-    )
+    est_file_path = "/home/ubuntu/Projects/AVP-RGBD-Shared/src/localization/result/20241214-z03-camera-1-all.txt"
+    # est_file_path = "/home/ubuntu/Projects/Livox_ws/src/mid360_locate/tum/20241214-z03-1-semantic.txt"
     est_tum_traj = read_tum(est_file_path)
 
-    # ref_file_path = (
-    #     "/home/ubuntu/Projects/AVP-RGBD-Shared/src/localization/result/20240331-1.txt"
-    # )
-    ref_file_path = "/home/ubuntu/Projects/AVP-RGBD-Shared/src/localization/result/20240331-z03-infra-contours.txt"
+    ref_file_path = "/home/ubuntu/Projects/Livox_ws/src/mid360_locate/tum/20241214_1.txt"
     ref_tum_traj = read_tum(ref_file_path)
 
-    t_offset , max_corr = get_time_offset(est_tum_traj, ref_tum_traj, 0.05, 0.001, 1)
-    print(t_offset, max_corr)
+    # t_offset , max_corr = get_time_offset(est_tum_traj, ref_tum_traj, 0.05, 0.01, 1)
+    # print(t_offset, max_corr)
 
-    # t_offset = 0.189  # .35  #.40
-    T_w, T_e, t_err, R_err = get_ext_and_coordinate_T(
-        est_tum_traj, ref_tum_traj, 0.05, t_offset, 100
-    )
 
+    duration = 0.2
+    step = 0.005
+    t_offset = 0.
+    best_t_err = float('inf')
+    best_R_err = 0
+    T_w, T_e = None, None
+    best_pair_num = 0
+    for i in range(-int(duration/2/step), int(duration/2/step)):
+        # t_offset = i*step  # .35  #.40
+        # T_w @ T_est = T_ref @ T_e
+        T_w_step, T_e_step, t_err, R_err, pairs_num = get_ext_and_coordinate_T(est_tum_traj, ref_tum_traj, 0.02, i*step, 100, verbose=False)
+        print(f"offset: {i * step:.4}\t t_err: {t_err:.4}\t R_err: {R_err:.4f}\t Pairs:{pairs_num}")
+
+        if t_err < best_t_err:
+            best_t_err = t_err
+            best_R_err = R_err
+            t_offset = i*step
+            T_w = T_w_step
+            T_e = T_e_step
+            best_pair_num = pairs_num
+    
+    print("offset", t_offset, "t_err: ", best_t_err, "R_err: ", best_R_err, "Pairs:", pairs_num)
     print(T_w)
     print(T_e)
 
-    read_path = est_file_path
-    save_path = read_path[:-4] + "_transformed.txt"
-    transform_tum_poses(est_file_path, T_e, save_path)
+    read_path = ref_file_path
+    save_path = read_path.replace(".txt", "_transformed.txt")
+    print(save_path)
+    transform_tum_poses(read_path, np.linalg.inv(T_w), T_e, save_path)
 
     os.system(
-        f"evo_ape tum {save_path} {ref_file_path} -a --t_max_diff=0.01 --t_offset={-t_offset}  --plot_mode xy -r trans_part --save_results {ref_file_path[:-4]}-trans.zip --save_plot {ref_file_path[:-4]}-trans.png"
+        f"evo_ape tum {est_file_path} {save_path} -a --t_max_diff=0.02 --t_offset={-t_offset}  --plot_mode xy -r trans_part --save_results {est_file_path[:-4]}-trans.zip --save_plot {est_file_path[:-4]}-trans.png"
     )
 
     os.system(
-        f"evo_ape tum {save_path} {ref_file_path} -a --t_max_diff=0.01 --t_offset={-t_offset}  --plot_mode xy -r angle_deg --save_results {ref_file_path[:-4]}-rot.zip --save_plot {ref_file_path[:-4]}-rot.png"
+        f"evo_ape tum {est_file_path} {save_path} -a --t_max_diff=0.02 --t_offset={-t_offset}  --plot_mode xy -r angle_deg --save_results {est_file_path[:-4]}-rot.zip --save_plot {est_file_path[:-4]}-rot.png"
     )
+
+    # os.system(
+    #     f"evo_ape tum {est_file_path} {save_path} --t_max_diff=0.05 --t_offset={-t_offset}  --plot_mode xy -r trans_part"
+    # )
+
+    # os.system(
+    #     f"evo_ape tum {est_file_path} {save_path} --t_max_diff=0.05 --t_offset={-t_offset}  --plot_mode xy -r angle_deg"
+    # )
